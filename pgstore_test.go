@@ -32,7 +32,12 @@ func TestPGStore(t *testing.T) {
 		t.Skip("This test requires a real database.")
 	}
 
-	ss, err := NewPGStore(dsn, []byte(secret))
+	opts := &sessions.Options{
+		Path:   "/",
+		MaxAge: 86400 * 30,
+	}
+
+	ss, err := NewPGStore(dsn, opts, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}
@@ -134,7 +139,12 @@ func TestSessionOptionsAreUniquePerSession(t *testing.T) {
 		t.Skip("This test requires a real database.")
 	}
 
-	ss, err := NewPGStore(dsn, []byte(secret))
+	opts := &sessions.Options{
+		Path:   "/",
+		MaxAge: 86400 * 30,
+	}
+
+	ss, err := NewPGStore(dsn, opts, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}

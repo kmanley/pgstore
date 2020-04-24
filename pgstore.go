@@ -12,8 +12,8 @@ import (
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 
-	// Include the pq postgres driver.
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/stdlib"
+	"github.com/jmoiron/sqlx"
 )
 
 // PGStore represents the currently configured session store.
@@ -21,41 +21,37 @@ type PGStore struct {
 	Codecs  []securecookie.Codec
 	Options *sessions.Options
 	Path    string
-	DbPool  *sql.DB
+	DbPool  *sqlx.DB
 }
 
 // PGSession type
 type PGSession struct {
-	ID         int64
-	Key        string
-	Data       string
-	CreatedOn  time.Time
-	ModifiedOn time.Time
-	ExpiresOn  time.Time
+	ID         int64     `db:"id"`
+	Key        string    `db:"key"`
+	Data       string    `db:"data"`
+	CreatedOn  time.Time `db:"created_on"`
+	ModifiedOn time.Time `db:"modified_on"`
+	ExpiresOn  time.Time `db:"expires_on"`
 }
 
 // NewPGStore creates a new PGStore instance and a new database/sql pool.
 // This will also create in the database the schema needed by pgstore.
-func NewPGStore(dbURL string, keyPairs ...[]byte) (*PGStore, error) {
-	db, err := sql.Open("postgres", dbURL)
+func NewPGStore(dbURL string, opts *sessions.Options, keyPairs ...[]byte) (*PGStore, error) {
+	db, err := sqlx.Open("pgx", dbURL)
 	if err != nil {
-		// Ignore and return nil.
 		return nil, err
 	}
-	return NewPGStoreFromPool(db, keyPairs...)
+	return NewPGStoreFromPool(db, opts, keyPairs...)
 }
 
 // NewPGStoreFromPool creates a new PGStore instance from an existing
 // database/sql pool.
 // This will also create the database schema needed by pgstore.
-func NewPGStoreFromPool(db *sql.DB, keyPairs ...[]byte) (*PGStore, error) {
+func NewPGStoreFromPool(db *sqlx.DB, opts *sessions.Options, keyPairs ...[]byte) (*PGStore, error) {
 	dbStore := &PGStore{
-		Codecs: securecookie.CodecsFromPairs(keyPairs...),
-		Options: &sessions.Options{
-			Path:   "/",
-			MaxAge: 86400 * 30,
-		},
-		DbPool: db,
+		Codecs:  securecookie.CodecsFromPairs(keyPairs...),
+		Options: opts,
+		DbPool:  db,
 	}
 
 	// Create table if it doesn't exist
@@ -169,11 +165,11 @@ func (db *PGStore) MaxAge(age int) {
 // load fetches a session by ID from the database and decodes its content
 // into session.Values.
 func (db *PGStore) load(session *sessions.Session) error {
-	var s PGSession
+	s := PGSession{}
 
-	err := db.selectOne(&s, session.ID)
+	err := db.DbPool.Get(&s, "SELECT id, key, data, created_on, modified_on, expires_on FROM http_sessions WHERE key = $1", session.ID)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "Unable to find session in the database")
 	}
 
 	return securecookie.DecodeMulti(session.Name(), string(s.Data), &session.Values, db.Codecs...)
@@ -228,36 +224,30 @@ func (db *PGStore) destroy(session *sessions.Session) error {
 }
 
 func (db *PGStore) createSessionsTable() error {
-	stmt := `DO $$
-              BEGIN
-              CREATE TABLE IF NOT EXISTS http_sessions (
-              id BIGSERIAL PRIMARY KEY,
-              key BYTEA,
-              data BYTEA,
-              created_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-              modified_on TIMESTAMPTZ,
-              expires_on TIMESTAMPTZ);
-              EXCEPTION WHEN insufficient_privilege THEN
-                IF NOT EXISTS (SELECT FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = 'http_sessions') THEN
-                  RAISE;
-                END IF;
-              WHEN others THEN RAISE;
-              END;
-              $$;`
-
+	stmt := `
+	DO $$
+		BEGIN
+			CREATE TABLE IF NOT EXISTS http_sessions (
+				id BIGSERIAL PRIMARY KEY,
+				key BYTEA,
+				data BYTEA,
+				created_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+				modified_on TIMESTAMPTZ,
+				expires_on TIMESTAMPTZ
+			);
+			CREATE INDEX IF NOT EXISTS http_sessions_expiry_idx ON http_sessions (expires_on);
+			CREATE INDEX IF NOT EXISTS http_sessions_key_idx ON http_sessions (key);		
+			EXCEPTION WHEN insufficient_privilege THEN
+				IF NOT EXISTS (SELECT FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = 'http_sessions') THEN
+					RAISE;
+				END IF;
+			WHEN others THEN RAISE;
+		END;
+	$$;
+	`
 	_, err := db.DbPool.Exec(stmt)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to create http_sessions table in the database")
-	}
-
-	return nil
-}
-
-func (db *PGStore) selectOne(s *PGSession, key string) error {
-	stmt := "SELECT id, key, data, created_on, modified_on, expires_on FROM http_sessions WHERE key = $1"
-	err := db.DbPool.QueryRow(stmt, key).Scan(&s.ID, &s.Key, &s.Data, &s.CreatedOn, &s.ModifiedOn, &s.ExpiresOn)
-	if err != nil {
-		return errors.Wrapf(err, "Unable to find session in the database")
 	}
 
 	return nil
@@ -274,6 +264,5 @@ func (db *PGStore) insert(s *PGSession) error {
 func (db *PGStore) update(s *PGSession) error {
 	stmt := `UPDATE http_sessions SET data=$1, modified_on=$2, expires_on=$3 WHERE key=$4`
 	_, err := db.DbPool.Exec(stmt, s.Data, s.ModifiedOn, s.ExpiresOn, s.Key)
-
 	return err
 }

@@ -6,12 +6,18 @@ import (
 	"time"
 
 	"github.com/antonlindstrom/pgstore"
+	"github.com/gorilla/sessions"
 )
 
 // ExampleHandler is an example that displays the usage of PGStore.
 func ExampleHandler(w http.ResponseWriter, r *http.Request) {
+	opts := &sessions.Options{
+		Path:   "/",
+		MaxAge: 86400 * 30,
+	}
+
 	// Fetch new store.
-	store, err := pgstore.NewPGStore("postgres://user:password@127.0.0.1:5432/database?sslmode=verify-full", []byte("secret-key"))
+	store, err := pgstore.NewPGStore("postgres://user:password@127.0.0.1:5432/database?sslmode=verify-full", opts, []byte("secret-key"))
 	if err != nil {
 		log.Fatalf(err.Error())
 	}

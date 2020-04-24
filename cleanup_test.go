@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	"time"
+
+	"github.com/gorilla/sessions"
 )
 
 func TestCleanup(t *testing.T) {
@@ -13,14 +14,19 @@ func TestCleanup(t *testing.T) {
 		t.Skip("This test requires a real database.")
 	}
 
-	ss, err := NewPGStore(dsn, []byte(secret))
+	opts := &sessions.Options{
+		Path:   "/",
+		MaxAge: 86400 * 30,
+	}
+
+	ss, err := NewPGStore(dsn, opts, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}
 
 	defer ss.Close()
 	// Start the cleanup goroutine.
-	defer ss.StopCleanup(ss.Cleanup(time.Millisecond * 500))
+	//defer ss.StopCleanup(ss.Cleanup(time.Millisecond * 500))
 
 	req, err := http.NewRequest("GET", "http://www.example.com", nil)
 	if err != nil {
@@ -41,7 +47,9 @@ func TestCleanup(t *testing.T) {
 	}
 
 	// Give the ticker a moment to run.
-	time.Sleep(time.Millisecond * 1500)
+	//time.Sleep(time.Millisecond * 1500)
+
+	ss.DeleteExpired()
 
 	// SELECT expired sessions. We should get a count of zero back.
 	var count int
