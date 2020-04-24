@@ -1,7 +1,6 @@
 package pgstore
 
 import (
-	"log"
 	"time"
 )
 
@@ -45,7 +44,7 @@ func (p *PGStore) cleanup(interval time.Duration, quit <-chan struct{}, done cha
 			// Delete expired sessions on each tick.
 			err := p.DeleteExpired()
 			if err != nil {
-				log.Printf("pgstore: unable to delete expired sessions: %v", err)
+				p.logger.Errorf("pgstore: unable to delete expired sessions: %v", err)
 			}
 		}
 	}

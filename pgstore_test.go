@@ -37,7 +37,7 @@ func TestPGStore(t *testing.T) {
 		MaxAge: 86400 * 30,
 	}
 
-	ss, err := NewPGStore(dsn, opts, []byte(secret))
+	ss, err := NewPGStore(dsn, opts, nil, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}
@@ -144,7 +144,7 @@ func TestSessionOptionsAreUniquePerSession(t *testing.T) {
 		MaxAge: 86400 * 30,
 	}
 
-	ss, err := NewPGStore(dsn, opts, []byte(secret))
+	ss, err := NewPGStore(dsn, opts, nil, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}

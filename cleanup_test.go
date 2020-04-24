@@ -19,7 +19,7 @@ func TestCleanup(t *testing.T) {
 		MaxAge: 86400 * 30,
 	}
 
-	p, err := NewPGStore(dsn, opts, []byte(secret))
+	p, err := NewPGStore(dsn, opts, nil, []byte(secret))
 	if err != nil {
 		t.Fatal("Failed to get store", err)
 	}

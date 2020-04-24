@@ -3,6 +3,7 @@ package pgstore
 import (
 	"database/sql"
 	"encoding/base32"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,12 +17,33 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+type logger interface {
+	Infof(string, ...interface{})
+	Warningf(string, ...interface{})
+	Errorf(string, ...interface{})
+}
+
+type defaultLogger struct{}
+
+func (l defaultLogger) Infof(format string, v ...interface{}) {
+	log.Printf(format, v...)
+}
+
+func (l defaultLogger) Warningf(format string, v ...interface{}) {
+	log.Printf(format, v...)
+}
+
+func (l defaultLogger) Errorf(format string, v ...interface{}) {
+	log.Printf(format, v...)
+}
+
 // PGStore represents the currently configured session store.
 type PGStore struct {
 	Codecs  []securecookie.Codec
 	Options *sessions.Options
 	Path    string
 	db      *sqlx.DB
+	logger  logger
 }
 
 // PGSession type
@@ -36,18 +58,21 @@ type PGSession struct {
 
 // NewPGStore creates a new PGStore instance and a new database/sql pool.
 // This will also create in the database the schema needed by pgstore.
-func NewPGStore(dbURL string, opts *sessions.Options, keyPairs ...[]byte) (*PGStore, error) {
+func NewPGStore(dbURL string, opts *sessions.Options, logger logger, keyPairs ...[]byte) (*PGStore, error) {
 	db, err := sqlx.Open("pgx", dbURL)
 	if err != nil {
 		return nil, err
 	}
-	return NewPGStoreFromPool(db, opts, keyPairs...)
+	return NewPGStoreFromPool(db, opts, logger, keyPairs...)
 }
 
 // NewPGStoreFromPool creates a new PGStore instance from an existing
 // database/sql pool.
 // This will also create the database schema needed by pgstore.
-func NewPGStoreFromPool(db *sqlx.DB, opts *sessions.Options, keyPairs ...[]byte) (*PGStore, error) {
+func NewPGStoreFromPool(db *sqlx.DB, opts *sessions.Options, logger logger, keyPairs ...[]byte) (*PGStore, error) {
+	if logger == nil {
+		logger = defaultLogger{}
+	}
 	p := &PGStore{
 		Codecs:  securecookie.CodecsFromPairs(keyPairs...),
 		Options: opts,
