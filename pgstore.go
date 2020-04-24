@@ -21,7 +21,7 @@ type PGStore struct {
 	Codecs  []securecookie.Codec
 	Options *sessions.Options
 	Path    string
-	DbPool  *sqlx.DB
+	db      *sqlx.DB
 }
 
 // PGSession type
@@ -48,48 +48,48 @@ func NewPGStore(dbURL string, opts *sessions.Options, keyPairs ...[]byte) (*PGSt
 // database/sql pool.
 // This will also create the database schema needed by pgstore.
 func NewPGStoreFromPool(db *sqlx.DB, opts *sessions.Options, keyPairs ...[]byte) (*PGStore, error) {
-	dbStore := &PGStore{
+	p := &PGStore{
 		Codecs:  securecookie.CodecsFromPairs(keyPairs...),
 		Options: opts,
-		DbPool:  db,
+		db:      db,
 	}
 
 	// Create table if it doesn't exist
-	err := dbStore.createSessionsTable()
+	err := p.createSessionsTable()
 	if err != nil {
 		return nil, err
 	}
 
-	return dbStore, nil
+	return p, nil
 }
 
 // Close closes the database connection.
-func (db *PGStore) Close() {
-	db.DbPool.Close()
+func (p *PGStore) Close() {
+	p.db.Close()
 }
 
 // Get Fetches a session for a given name after it has been added to the
 // registry.
-func (db *PGStore) Get(r *http.Request, name string) (*sessions.Session, error) {
-	return sessions.GetRegistry(r).Get(db, name)
+func (p *PGStore) Get(r *http.Request, name string) (*sessions.Session, error) {
+	return sessions.GetRegistry(r).Get(p, name)
 }
 
 // New returns a new session for the given name without adding it to the registry.
-func (db *PGStore) New(r *http.Request, name string) (*sessions.Session, error) {
-	session := sessions.NewSession(db, name)
+func (p *PGStore) New(r *http.Request, name string) (*sessions.Session, error) {
+	session := sessions.NewSession(p, name)
 	if session == nil {
 		return nil, nil
 	}
 
-	opts := *db.Options
+	opts := *p.Options
 	session.Options = &(opts)
 	session.IsNew = true
 
 	var err error
 	if c, errCookie := r.Cookie(name); errCookie == nil {
-		err = securecookie.DecodeMulti(name, c.Value, &session.ID, db.Codecs...)
+		err = securecookie.DecodeMulti(name, c.Value, &session.ID, p.Codecs...)
 		if err == nil {
-			err = db.load(session)
+			err = p.load(session)
 			if err == nil {
 				session.IsNew = false
 			} else if errors.Cause(err) == sql.ErrNoRows {
@@ -98,16 +98,16 @@ func (db *PGStore) New(r *http.Request, name string) (*sessions.Session, error) 
 		}
 	}
 
-	db.MaxAge(db.Options.MaxAge)
+	p.MaxAge(p.Options.MaxAge)
 
 	return session, err
 }
 
 // Save saves the given session into the database and deletes cookies if needed
-func (db *PGStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
+func (p *PGStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
 	// Set delete if max-age is < 0
 	if session.Options.MaxAge < 0 {
-		if err := db.destroy(session); err != nil {
+		if err := p.destroy(session); err != nil {
 			return err
 		}
 		http.SetCookie(w, sessions.NewCookie(session.Name(), "", session.Options))
@@ -122,12 +122,12 @@ func (db *PGStore) Save(r *http.Request, w http.ResponseWriter, session *session
 			), "=")
 	}
 
-	if err := db.save(session); err != nil {
+	if err := p.save(session); err != nil {
 		return err
 	}
 
 	// Keep the session ID key in a cookie so it can be looked up in DB later.
-	encoded, err := securecookie.EncodeMulti(session.Name(), session.ID, db.Codecs...)
+	encoded, err := securecookie.EncodeMulti(session.Name(), session.ID, p.Codecs...)
 	if err != nil {
 		return err
 	}
@@ -140,8 +140,8 @@ func (db *PGStore) Save(r *http.Request, w http.ResponseWriter, session *session
 // If l is 0 there is no limit to the size of a session, use with caution.
 // The default for a new PGStore is 4096. PostgreSQL allows for max
 // value sizes of up to 1GB (http://www.postgresql.org/docs/current/interactive/datatype-character.html)
-func (db *PGStore) MaxLength(l int) {
-	for _, c := range db.Codecs {
+func (p *PGStore) MaxLength(l int) {
+	for _, c := range p.Codecs {
 		if codec, ok := c.(*securecookie.SecureCookie); ok {
 			codec.MaxLength(l)
 		}
@@ -151,11 +151,11 @@ func (db *PGStore) MaxLength(l int) {
 // MaxAge sets the maximum age for the store and the underlying cookie
 // implementation. Individual sessions can be deleted by setting Options.MaxAge
 // = -1 for that session.
-func (db *PGStore) MaxAge(age int) {
-	db.Options.MaxAge = age
+func (p *PGStore) MaxAge(age int) {
+	p.Options.MaxAge = age
 
 	// Set the maxAge for each securecookie instance.
-	for _, codec := range db.Codecs {
+	for _, codec := range p.Codecs {
 		if sc, ok := codec.(*securecookie.SecureCookie); ok {
 			sc.MaxAge(age)
 		}
@@ -164,21 +164,21 @@ func (db *PGStore) MaxAge(age int) {
 
 // load fetches a session by ID from the database and decodes its content
 // into session.Values.
-func (db *PGStore) load(session *sessions.Session) error {
+func (p *PGStore) load(session *sessions.Session) error {
 	s := PGSession{}
 
-	err := db.DbPool.Get(&s, "SELECT id, key, data, created_on, modified_on, expires_on FROM http_sessions WHERE key = $1", session.ID)
+	err := p.db.Get(&s, "SELECT id, key, data, created_on, modified_on, expires_on FROM http_sessions WHERE key = $1", session.ID)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to find session in the database")
 	}
 
-	return securecookie.DecodeMulti(session.Name(), string(s.Data), &session.Values, db.Codecs...)
+	return securecookie.DecodeMulti(session.Name(), string(s.Data), &session.Values, p.Codecs...)
 }
 
 // save writes encoded session.Values to a database record.
 // writes to http_sessions table by default.
-func (db *PGStore) save(session *sessions.Session) error {
-	encoded, err := securecookie.EncodeMulti(session.Name(), session.Values, db.Codecs...)
+func (p *PGStore) save(session *sessions.Session) error {
+	encoded, err := securecookie.EncodeMulti(session.Name(), session.Values, p.Codecs...)
 	if err != nil {
 		return err
 	}
@@ -211,19 +211,19 @@ func (db *PGStore) save(session *sessions.Session) error {
 	}
 
 	if session.IsNew {
-		return db.insert(&s)
+		return p.insert(&s)
 	}
 
-	return db.update(&s)
+	return p.update(&s)
 }
 
 // Delete session
-func (db *PGStore) destroy(session *sessions.Session) error {
-	_, err := db.DbPool.Exec("DELETE FROM http_sessions WHERE key = $1", session.ID)
+func (p *PGStore) destroy(session *sessions.Session) error {
+	_, err := p.db.Exec("DELETE FROM http_sessions WHERE key = $1", session.ID)
 	return err
 }
 
-func (db *PGStore) createSessionsTable() error {
+func (p *PGStore) createSessionsTable() error {
 	stmt := `
 	DO $$
 		BEGIN
@@ -245,7 +245,7 @@ func (db *PGStore) createSessionsTable() error {
 		END;
 	$$;
 	`
-	_, err := db.DbPool.Exec(stmt)
+	_, err := p.db.Exec(stmt)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to create http_sessions table in the database")
 	}
@@ -253,16 +253,16 @@ func (db *PGStore) createSessionsTable() error {
 	return nil
 }
 
-func (db *PGStore) insert(s *PGSession) error {
+func (p *PGStore) insert(s *PGSession) error {
 	stmt := `INSERT INTO http_sessions (key, data, created_on, modified_on, expires_on)
            VALUES ($1, $2, $3, $4, $5)`
-	_, err := db.DbPool.Exec(stmt, s.Key, s.Data, s.CreatedOn, s.ModifiedOn, s.ExpiresOn)
+	_, err := p.db.Exec(stmt, s.Key, s.Data, s.CreatedOn, s.ModifiedOn, s.ExpiresOn)
 
 	return err
 }
 
-func (db *PGStore) update(s *PGSession) error {
+func (p *PGStore) update(s *PGSession) error {
 	stmt := `UPDATE http_sessions SET data=$1, modified_on=$2, expires_on=$3 WHERE key=$4`
-	_, err := db.DbPool.Exec(stmt, s.Data, s.ModifiedOn, s.ExpiresOn, s.Key)
+	_, err := p.db.Exec(stmt, s.Data, s.ModifiedOn, s.ExpiresOn, s.Key)
 	return err
 }
